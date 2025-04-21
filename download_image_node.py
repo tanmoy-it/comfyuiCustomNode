@@ -25,23 +25,22 @@ class DownloadImageDataUrl:
         counter = 0 # Simple counter if batching images
 
         for image in images:
-            # Convert tensor to PIL Image
+            # Convert tensor to NumPy array
             img_np = image.cpu().numpy()
-            img_pil = Image.fromarray((img_np.squeeze(0) * 255.).astype(np.uint8))
+
+            # Ensure the shape is valid and avoid squeezing non-size-1 axes
+            # The expected shape for an image is usually (1, H, W) or (C, H, W)
+            if img_np.shape[0] == 1:  # If the first dimension is 1 (e.g., grayscale image)
+                img_np = np.squeeze(img_np, axis=0)  # Squeeze only the first dimension
+
+            # Convert NumPy array to PIL Image
+            img_pil = Image.fromarray((img_np * 255).astype(np.uint8))  # Scale to [0, 255] and convert to uint8
 
             # --- Generate PNG bytes in memory ---
             with io.BytesIO() as byte_stream:
-                # Add metadata if available (Optional - PNGInfo might not be standard for data URLs)
-                # metadata = None
-                # if prompt is not None and extra_pnginfo is not None:
-                #    from nodes import SaveImage # Import might be needed
-                #    metadata = SaveImage.create_metadata(prompt, extra_pnginfo, img_np)
-                # if metadata:
-                #    img_pil.save(byte_stream, format='PNG', pnginfo=metadata, compress_level=4)
-                # else:
-                img_pil.save(byte_stream, format='PNG', compress_level=4) # Save to memory buffer
-
-                png_bytes = byte_stream.getvalue() # Get bytes from buffer
+                # Save to memory buffer
+                img_pil.save(byte_stream, format='PNG', compress_level=4)  # Save as PNG
+                png_bytes = byte_stream.getvalue()  # Get bytes from buffer
 
             # --- Encode bytes as Base64 ---
             base64_encoded_data = base64.b64encode(png_bytes).decode('utf-8')
@@ -50,7 +49,6 @@ class DownloadImageDataUrl:
             data_url = f"data:image/png;base64,{base64_encoded_data}"
 
             # --- Prepare filename ---
-            # You might want a more sophisticated filename based on prompt/metadata if available
             filename = f"{filename_prefix}_{counter:05}.png"
             counter += 1
 
