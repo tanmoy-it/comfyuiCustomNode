@@ -12,58 +12,44 @@ class DownloadImageDataUrl:
                 "images": ("IMAGE", ),
                 "filename_prefix": ("STRING", {"default": "ComfyUI"}),
             },
-            "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
+            "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"}, # Keep hidden inputs if you want metadata in filename potentially
         }
 
-    RETURN_TYPES = ()
+    RETURN_TYPES = () # This node doesn't pass data along the chain
     FUNCTION = "generate_data_url_and_trigger_download"
-    OUTPUT_NODE = True
+    OUTPUT_NODE = True # Mark this as a terminal node
     CATEGORY = "image"
 
     def generate_data_url_and_trigger_download(self, images, filename_prefix="ComfyUI", prompt=None, extra_pnginfo=None):
         results = []
-        counter = 0
+        counter = 0 # Simple counter if batching images
 
         for image in images:
+            # Convert tensor to NumPy array
             img_np = image.cpu().numpy()
 
-            # Handle both (C, H, W) and (H, W, C) formats
-            if img_np.ndim == 3:
-                if img_np.shape[0] in [1, 3, 4]:  # (C, H, W)
-                    if img_np.shape[0] == 1:  # Grayscale
-                        img_np = np.squeeze(img_np, axis=0)
-                        mode = "L"
-                    elif img_np.shape[0] == 3:  # RGB
-                        img_np = np.transpose(img_np, (1, 2, 0))
-                        mode = "RGB"
-                    elif img_np.shape[0] == 4:  # RGBA
-                        img_np = np.transpose(img_np, (1, 2, 0))
-                        mode = "RGBA"
-                elif img_np.shape[2] in [1, 3, 4]:  # (H, W, C)
-                    if img_np.shape[2] == 1:
-                        img_np = np.squeeze(img_np, axis=2)
-                        mode = "L"
-                    elif img_np.shape[2] == 3:
-                        mode = "RGB"
-                    elif img_np.shape[2] == 4:
-                        mode = "RGBA"
-                else:
-                    raise ValueError(f"Unsupported image shape: {img_np.shape}")
-            elif img_np.ndim == 2:
-                mode = "L"
-            else:
-                raise ValueError(f"Unsupported image shape: {img_np.shape}")
+            # Ensure the shape is valid and avoid squeezing non-size-1 axes
+            # The expected shape for an image is usually (1, H, W) or (C, H, W)
+            if img_np.shape[0] == 1:  # If the first dimension is 1 (e.g., grayscale image)
+                img_np = np.squeeze(img_np, axis=0)  # Squeeze only the first dimension
 
-            img_pil = Image.fromarray((img_np * 255).clip(0, 255).astype(np.uint8), mode=mode)
+            # Convert NumPy array to PIL Image
+            img_pil = Image.fromarray((img_np * 255).astype(np.uint8))  # Scale to [0, 255] and convert to uint8
 
+            # --- Generate PNG bytes in memory ---
             with io.BytesIO() as byte_stream:
-                img_pil.save(byte_stream, format='PNG', compress_level=4)
-                png_bytes = byte_stream.getvalue()
+                # Save to memory buffer
+                img_pil.save(byte_stream, format='PNG', compress_level=4)  # Save as PNG
+                png_bytes = byte_stream.getvalue()  # Get bytes from buffer
 
+            # --- Encode bytes as Base64 ---
             base64_encoded_data = base64.b64encode(png_bytes).decode('utf-8')
+
+            # --- Create data: URL ---
             data_url = f"data:image/png;base64,{base64_encoded_data}"
 
-            filename = f"{filename_prefix}_{counter:05}.png" if len(images) > 1 else f"{filename_prefix}.png"
+            # --- Prepare filename ---
+            filename = f"{filename_prefix}_{counter:05}.png"
             counter += 1
 
             results.append({
@@ -71,8 +57,8 @@ class DownloadImageDataUrl:
                 "data_url": data_url
             })
 
-        # Return at the root level for JS compatibility
-        return {"data_urls": results}
+        # Return the data URL info wrapped in 'ui' -> 'data_urls' (using a custom key)
+        return {"ui": {"data_urls": results}}
 
 # --- Node Registration ---
 NODE_CLASS_MAPPINGS = {
