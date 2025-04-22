@@ -27,17 +27,26 @@ class DownloadImageDataUrl:
         for image in images:
             img_np = image.cpu().numpy()
 
-            # Handle grayscale, RGB, RGBA
+            # Handle both (C, H, W) and (H, W, C) formats
             if img_np.ndim == 3:
-                if img_np.shape[0] == 1:  # Grayscale: (1, H, W)
-                    img_np = np.squeeze(img_np, axis=0)
-                    mode = "L"
-                elif img_np.shape[0] == 3:  # RGB: (3, H, W)
-                    img_np = np.transpose(img_np, (1, 2, 0))
-                    mode = "RGB"
-                elif img_np.shape[0] == 4:  # RGBA: (4, H, W)
-                    img_np = np.transpose(img_np, (1, 2, 0))
-                    mode = "RGBA"
+                if img_np.shape[0] in [1, 3, 4]:  # (C, H, W)
+                    if img_np.shape[0] == 1:  # Grayscale
+                        img_np = np.squeeze(img_np, axis=0)
+                        mode = "L"
+                    elif img_np.shape[0] == 3:  # RGB
+                        img_np = np.transpose(img_np, (1, 2, 0))
+                        mode = "RGB"
+                    elif img_np.shape[0] == 4:  # RGBA
+                        img_np = np.transpose(img_np, (1, 2, 0))
+                        mode = "RGBA"
+                elif img_np.shape[2] in [1, 3, 4]:  # (H, W, C)
+                    if img_np.shape[2] == 1:
+                        img_np = np.squeeze(img_np, axis=2)
+                        mode = "L"
+                    elif img_np.shape[2] == 3:
+                        mode = "RGB"
+                    elif img_np.shape[2] == 4:
+                        mode = "RGBA"
                 else:
                     raise ValueError(f"Unsupported image shape: {img_np.shape}")
             elif img_np.ndim == 2:
