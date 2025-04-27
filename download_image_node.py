@@ -1,10 +1,14 @@
 import server
 import base64
 import io
-from PIL import Image
+from PIL import Image, PngImagePlugin
 import numpy as np
 
 class DownloadImageDataUrl:
+    """
+    ComfyUI Output Node: DownloadImageDataUrl
+    Converts images to PNG data URLs and triggers download in the browser.
+    """
     @classmethod
     def INPUT_TYPES(s):
         return {
@@ -12,52 +16,56 @@ class DownloadImageDataUrl:
                 "images": ("IMAGE", ),
                 "filename_prefix": ("STRING", {"default": "ComfyUI"}),
             },
-            "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"}, # Keep hidden inputs if you want metadata in filename potentially
+            "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
         }
 
-    RETURN_TYPES = () # This node doesn't pass data along the chain
+    RETURN_TYPES = ()
     FUNCTION = "generate_data_url_and_trigger_download"
-    OUTPUT_NODE = True # Mark this as a terminal node
+    OUTPUT_NODE = True
     CATEGORY = "image"
 
     def generate_data_url_and_trigger_download(self, images, filename_prefix="ComfyUI", prompt=None, extra_pnginfo=None):
+        """
+        Converts input images to PNG data URLs and prepares them for download.
+        Optionally embeds extra PNG info if provided.
+        """
         results = []
-        counter = 0 # Simple counter if batching images
+        counter = 0
 
         for image in images:
-            # Convert tensor to NumPy array
-            img_np = image.cpu().numpy()
+            try:
+                img_np = image.cpu().numpy()
+                if img_np.shape[0] == 1:
+                    img_np = np.squeeze(img_np, axis=0)
+                img_pil = Image.fromarray((img_np * 255).astype(np.uint8))
 
-            # Ensure the shape is valid and avoid squeezing non-size-1 axes
-            # The expected shape for an image is usually (1, H, W) or (C, H, W)
-            if img_np.shape[0] == 1:  # If the first dimension is 1 (e.g., grayscale image)
-                img_np = np.squeeze(img_np, axis=0)  # Squeeze only the first dimension
+                # --- Generate PNG bytes in memory ---
+                with io.BytesIO() as byte_stream:
+                    pnginfo = None
+                    if extra_pnginfo and isinstance(extra_pnginfo, dict):
+                        pnginfo = PngImagePlugin.PngInfo()
+                        for k, v in extra_pnginfo.items():
+                            pnginfo.add_text(str(k), str(v))
+                    img_pil.save(byte_stream, format='PNG', compress_level=4, pnginfo=pnginfo)
+                    png_bytes = byte_stream.getvalue()
 
-            # Convert NumPy array to PIL Image
-            img_pil = Image.fromarray((img_np * 255).astype(np.uint8))  # Scale to [0, 255] and convert to uint8
+                base64_encoded_data = base64.b64encode(png_bytes).decode('utf-8')
+                data_url = f"data:image/png;base64,{base64_encoded_data}"
 
-            # --- Generate PNG bytes in memory ---
-            with io.BytesIO() as byte_stream:
-                # Save to memory buffer
-                img_pil.save(byte_stream, format='PNG', compress_level=4)  # Save as PNG
-                png_bytes = byte_stream.getvalue()  # Get bytes from buffer
+                filename = f"{filename_prefix}_{counter:05}.png"
+                counter += 1
 
-            # --- Encode bytes as Base64 ---
-            base64_encoded_data = base64.b64encode(png_bytes).decode('utf-8')
+                results.append({
+                    "filename": filename,
+                    "data_url": data_url
+                })
+            except Exception as e:
+                results.append({
+                    "filename": f"{filename_prefix}_{counter:05}_error.txt",
+                    "data_url": f"data:text/plain;base64,{base64.b64encode(str(e).encode()).decode()}"
+                })
+                counter += 1
 
-            # --- Create data: URL ---
-            data_url = f"data:image/png;base64,{base64_encoded_data}"
-
-            # --- Prepare filename ---
-            filename = f"{filename_prefix}_{counter:05}.png"
-            counter += 1
-
-            results.append({
-                "filename": filename,
-                "data_url": data_url
-            })
-
-        # Return the data URL info wrapped in 'ui' -> 'data_urls' (using a custom key)
         return {"ui": {"data_urls": results}}
 
 # --- Node Registration ---
