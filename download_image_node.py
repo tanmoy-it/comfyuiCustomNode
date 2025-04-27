@@ -25,10 +25,6 @@ class DownloadImageDataUrl:
     CATEGORY = "image"
 
     def generate_data_url_and_trigger_download(self, images, filename_prefix="ComfyUI", prompt=None, extra_pnginfo=None):
-        """
-        Converts input images to PNG data URLs and prepares them for download.
-        Optionally embeds extra PNG info if provided.
-        """
         results = []
         counter = 0
 
@@ -39,13 +35,16 @@ class DownloadImageDataUrl:
                     img_np = np.squeeze(img_np, axis=0)
                 img_pil = Image.fromarray((img_np * 255).astype(np.uint8))
 
-                # --- Generate PNG bytes in memory ---
                 with io.BytesIO() as byte_stream:
                     pnginfo = None
                     if extra_pnginfo and isinstance(extra_pnginfo, dict):
                         pnginfo = PngImagePlugin.PngInfo()
+                        # Embed all extra_pnginfo as text
                         for k, v in extra_pnginfo.items():
                             pnginfo.add_text(str(k), str(v))
+                        # If workflow is present, embed it under the "workflow" key (ComfyUI convention)
+                        if "workflow" in extra_pnginfo:
+                            pnginfo.add_text("workflow", str(extra_pnginfo["workflow"]))
                     img_pil.save(byte_stream, format='PNG', compress_level=4, pnginfo=pnginfo)
                     png_bytes = byte_stream.getvalue()
 
