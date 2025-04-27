@@ -3,6 +3,7 @@ import base64
 import io
 from PIL import Image, PngImagePlugin
 import numpy as np
+import json
 
 class DownloadImageDataUrl:
     """
@@ -36,15 +37,21 @@ class DownloadImageDataUrl:
                 img_pil = Image.fromarray((img_np * 255).astype(np.uint8))
 
                 with io.BytesIO() as byte_stream:
-                    pnginfo = None
+                    pnginfo = PngImagePlugin.PngInfo()
+                    # Embed extra_pnginfo as JSON under "extra_pnginfo"
                     if extra_pnginfo and isinstance(extra_pnginfo, dict):
-                        pnginfo = PngImagePlugin.PngInfo()
-                        # Embed all extra_pnginfo as text
-                        for k, v in extra_pnginfo.items():
-                            pnginfo.add_text(str(k), str(v))
-                        # If workflow is present, embed it under the "workflow" key (ComfyUI convention)
+                        # Embed the entire extra_pnginfo as JSON
+                        pnginfo.add_text("extra_pnginfo", json.dumps(extra_pnginfo))
+                        # If workflow is present, embed as JSON string under "workflow"
                         if "workflow" in extra_pnginfo:
-                            pnginfo.add_text("workflow", str(extra_pnginfo["workflow"]))
+                            pnginfo.add_text("workflow", json.dumps(extra_pnginfo["workflow"]))
+                        # If prompt is present, embed as JSON string under "prompt"
+                        if "prompt" in extra_pnginfo:
+                            pnginfo.add_text("prompt", json.dumps(extra_pnginfo["prompt"]))
+                        # Optionally, embed all other keys as plain text for reference
+                        for k, v in extra_pnginfo.items():
+                            if k not in ("workflow", "prompt"):
+                                pnginfo.add_text(str(k), str(v))
                     img_pil.save(byte_stream, format='PNG', compress_level=4, pnginfo=pnginfo)
                     png_bytes = byte_stream.getvalue()
 
