@@ -41,7 +41,7 @@ class DownloadImageDataUrl:
                     # Embed extra_pnginfo as JSON under "extra_pnginfo"
                     if extra_pnginfo and isinstance(extra_pnginfo, dict):
                         # Embed the entire extra_pnginfo as JSON
-                        # pnginfo.add_text("extra_pnginfo", json.dumps(extra_pnginfo))
+                        # pnginfo.add_text("extra_pnginfo", json.dumps(extra_pnginfo)) #not needed for workflow embedding
                         # If workflow is present, embed as JSON string under "workflow"
                         if "workflow" in extra_pnginfo:
                             pnginfo.add_text("workflow", json.dumps(extra_pnginfo["workflow"]))
