@@ -4,6 +4,7 @@ import io
 from PIL import Image, PngImagePlugin
 import numpy as np
 import json
+import datetime  # Added for timestamp
 
 class DownloadImageDataUrl:
     """
@@ -27,7 +28,7 @@ class DownloadImageDataUrl:
 
     def generate_data_url_and_trigger_download(self, images, filename_prefix="ComfyUI", prompt=None, extra_pnginfo=None):
         results = []
-        counter = 0
+        # counter = 0  # No longer needed
 
         for image in images:
             try:
@@ -58,19 +59,21 @@ class DownloadImageDataUrl:
                 base64_encoded_data = base64.b64encode(png_bytes).decode('utf-8')
                 data_url = f"data:image/png;base64,{base64_encoded_data}"
 
-                filename = f"{filename_prefix}_{counter:05}.png"
-                counter += 1
+                # Generate filename with timestamp (YYYYmmdd_HHMMSS_mmm)
+                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+                filename = f"{filename_prefix}_{timestamp}.png"
 
                 results.append({
                     "filename": filename,
                     "data_url": data_url
                 })
             except Exception as e:
+                # Error filename also uses timestamp
+                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
                 results.append({
-                    "filename": f"{filename_prefix}_{counter:05}_error.txt",
+                    "filename": f"{filename_prefix}_{timestamp}_error.txt",
                     "data_url": f"data:text/plain;base64,{base64.b64encode(str(e).encode()).decode()}"
                 })
-                counter += 1
 
         return {"ui": {"data_urls": results}}
 
