@@ -17,6 +17,7 @@ class DownloadImageDataUrl:
             "required": {
                 "images": ("IMAGE", ),
                 "filename_prefix": ("STRING", {"default": "ComfyUI"}),
+                "include_timestamp": ("BOOLEAN", {"default": True}),
             },
             "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
         }
@@ -26,9 +27,8 @@ class DownloadImageDataUrl:
     OUTPUT_NODE = True
     CATEGORY = "image"
 
-    def generate_data_url_and_trigger_download(self, images, filename_prefix="ComfyUI", prompt=None, extra_pnginfo=None):
+    def generate_data_url_and_trigger_download(self, images, filename_prefix="ComfyUI", include_timestamp=True, prompt=None, extra_pnginfo=None):
         results = []
-        # counter = 0  # No longer needed
 
         for image in images:
             try:
@@ -59,16 +59,20 @@ class DownloadImageDataUrl:
                 base64_encoded_data = base64.b64encode(png_bytes).decode('utf-8')
                 data_url = f"data:image/png;base64,{base64_encoded_data}"
 
-                # Generate filename with timestamp (YYYYmmdd_HHMMSS_mmm)
-                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
-                filename = f"{filename_prefix}_{timestamp}.png"
+                # Create filename with optional timestamp
+                if include_timestamp:
+                    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+                    filename = f"{filename_prefix}_{timestamp}.png"
+                else:
+                    # Simple counter for multiple images when no timestamp
+                    filename = f"{filename_prefix}.png"
 
                 results.append({
                     "filename": filename,
                     "data_url": data_url
                 })
             except Exception as e:
-                # Error filename also uses timestamp
+                # Error filename still uses timestamp to avoid conflicts
                 timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
                 results.append({
                     "filename": f"{filename_prefix}_{timestamp}_error.txt",
