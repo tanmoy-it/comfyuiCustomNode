@@ -19,8 +19,8 @@ class DownloadImageDataUrl:
                 "images": ("IMAGE", ),
                 "filename_prefix": ("STRING", {"default": "ComfyUI"}),
                 "include_timestamp": ("BOOLEAN", {"default": True}),
-                # Metadata selection
-                "metadata_mode": (["all", "workflow", "prompt", "none"], {"default": "all"}),
+                # Replace modes with a single toggle
+                "embed_workflow": ("BOOLEAN", {"default": True, "label": "Embed workflow & prompt"}),
                 # Format & quality
                 "output_format": (["PNG", "JPEG", "WEBP"], {"default": "PNG"}),
                 "quality": ("INT", {"default": 90, "min": 1, "max": 100, "step": 1, "display": "slider"}),
@@ -66,9 +66,9 @@ class DownloadImageDataUrl:
         mode = "RGBA" if arr_u8.shape[2] == 4 else "RGB"
         return Image.fromarray(arr_u8, mode=mode)
 
-    def _build_pnginfo(self, metadata_mode, prompt, extra_pnginfo):
+    def _build_pnginfo(self, embed_workflow, prompt, extra_pnginfo):
         # Ensure metadata is discoverable by tools expecting tEXt (ASCII) and/or iTXt (UTF-8)
-        if metadata_mode == "none":
+        if not embed_workflow:
             return None
         pnginfo = PngImagePlugin.PngInfo()
         added = False
@@ -101,12 +101,12 @@ class DownloadImageDataUrl:
             added = True
 
         if isinstance(extra_pnginfo, dict):
-            if metadata_mode in ("all", "workflow") and "workflow" in extra_pnginfo:
+            if "workflow" in extra_pnginfo:
                 add_both_chunks("workflow", extra_pnginfo.get("workflow"))
-            if metadata_mode in ("all", "prompt") and "prompt" in extra_pnginfo:
+            if "prompt" in extra_pnginfo:
                 add_both_chunks("prompt", extra_pnginfo.get("prompt"))
         else:
-            if metadata_mode in ("all", "prompt") and prompt is not None:
+            if prompt is not None:
                 add_both_chunks("prompt", prompt)
 
         return pnginfo if added else None
@@ -116,7 +116,7 @@ class DownloadImageDataUrl:
         images,
         filename_prefix="ComfyUI",
         include_timestamp=True,
-        metadata_mode="all",
+        embed_workflow=True,
         output_format="PNG",
         quality=90,
         png_compress_level=4,
@@ -136,8 +136,8 @@ class DownloadImageDataUrl:
         fmt = (output_format or "PNG").upper()
         if fmt not in ("PNG", "JPEG", "WEBP"):
             fmt = "PNG"
-        # Ensure workflow/prompt can be embedded and later detected on drop
-        if metadata_mode != "none" and fmt != "PNG":
+        # If embedding workflow/prompt, ensure PNG so chunks are preserved
+        if embed_workflow and fmt != "PNG":
             fmt = "PNG"
 
         prefix = self._sanitize_filename(str(filename_prefix or "ComfyUI"))
@@ -153,11 +153,10 @@ class DownloadImageDataUrl:
         for idx, image in enumerate(images):
             try:
                 img_pil = self._tensor_to_pil(image)
-                # Adjust for format
                 save_kwargs = {}
                 if fmt == "PNG":
                     save_kwargs["compress_level"] = int(png_compress_level)
-                    pnginfo = self._build_pnginfo(metadata_mode, prompt, extra_pnginfo)
+                    pnginfo = self._build_pnginfo(embed_workflow, prompt, extra_pnginfo)
                 else:
                     pnginfo = None
 
