@@ -5,6 +5,7 @@ from PIL import Image, PngImagePlugin
 import numpy as np
 import json
 import datetime  # Added for timestamp
+import re  # filename sanitization
 
 class DownloadImageDataUrl:
     """
@@ -18,7 +19,26 @@ class DownloadImageDataUrl:
                 "images": ("IMAGE", ),
                 "filename_prefix": ("STRING", {"default": "ComfyUI"}),
                 "include_timestamp": ("BOOLEAN", {"default": True}),
-                "add_metadata": ("BOOLEAN", {"default": True, "label": "Add Metadata?"}),
+                # Metadata selection
+                "metadata_mode": (["all", "workflow", "prompt", "none"], {"default": "all"}),
+                # Format & quality
+                "output_format": (["PNG", "JPEG", "WEBP"], {"default": "PNG"}),
+                "quality": ("INT", {"default": 90, "min": 1, "max": 100, "step": 1, "display": "slider"}),
+                "png_compress_level": ("INT", {"default": 4, "min": 0, "max": 9}),
+                "webp_lossless": ("BOOLEAN", {"default": False}),
+                # Filename/index controls
+                "index_suffix": ("BOOLEAN", {"default": True}),
+                "start_index": ("INT", {"default": 1, "min": 0, "max": 10_000}),
+                "zero_padding": ("INT", {"default": 4, "min": 1, "max": 8}),
+                # Client-side actions
+                "batch_zip": ("BOOLEAN", {"default": False, "label": "Batch ZIP (one file)"}),
+                "zip_filename": ("STRING", {"default": "ComfyUI_Images.zip"}),
+                "clipboard": ("BOOLEAN", {"default": False, "label": "Copy first image to clipboard"}),
+                "open_in_new_tab": ("BOOLEAN", {"default": False, "label": "Preview: open first image"}),
+                "save_to_folder": ("BOOLEAN", {"default": False, "label": "Save to chosen folder (FS Access)"}),
+                # Notifications / dev
+                "notify_thumbnails": ("BOOLEAN", {"default": True}),
+                "developer_emit": ("BOOLEAN", {"default": True}),
             },
             "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
         }
@@ -28,59 +48,179 @@ class DownloadImageDataUrl:
     OUTPUT_NODE = True
     CATEGORY = "image"
 
-    def generate_data_url_and_trigger_download(self, images, filename_prefix="ComfyUI", include_timestamp=True, add_metadata=True, prompt=None, extra_pnginfo=None):
+    def _sanitize_filename(self, name: str, max_len: int = 128) -> str:
+        # Allow alnum, space, - _ . and remove others; collapse spaces; trim length
+        name = re.sub(r'[\\/:*?"<>|]+', '_', name)
+        name = re.sub(r'\s+', ' ', name).strip()
+        if not name:
+            name = "image"
+        return name[:max_len]
+
+    def _tensor_to_pil(self, image_tensor):
+        arr = image_tensor
+        if hasattr(image_tensor, "cpu"):
+            arr = image_tensor.cpu().numpy()
+        else:
+            arr = np.asarray(image_tensor)
+        # Accept shapes: (H,W,C) or (1,H,W,C)
+        if arr.ndim == 4 and arr.shape[0] == 1:
+            arr = np.squeeze(arr, axis=0)
+        if arr.ndim != 3 or arr.shape[2] not in (3, 4):
+            raise ValueError(f"Unsupported image tensor shape: {arr.shape}")
+        arr = np.clip(arr, 0.0, 1.0)
+        arr_u8 = (arr * 255).astype(np.uint8)
+        mode = "RGBA" if arr_u8.shape[2] == 4 else "RGB"
+        return Image.fromarray(arr_u8, mode=mode)
+
+    def _build_pnginfo(self, metadata_mode, prompt, extra_pnginfo, max_bytes=64 * 1024):
+        if metadata_mode == "none":
+            return None
+        pnginfo = PngImagePlugin.PngInfo()
+        def add_json(key, obj):
+            try:
+                s = json.dumps(obj, ensure_ascii=False)
+                # Cap to max_bytes to avoid oversized chunks; keep it valid JSON if possible
+                if len(s.encode("utf-8")) > max_bytes:
+                    # Truncate string safely and mark truncated
+                    s = s.encode("utf-8")[:max_bytes]
+                    # best-effort decode
+                    s = s.decode("utf-8", errors="ignore")
+                    # We cannot ensure valid JSON after truncation; wrap in an object
+                    s = json.dumps({"truncated": True, "data_prefix": s})
+                pnginfo.add_text(key, s)
+            except Exception:
+                pass
+
+        if extra_pnginfo and isinstance(extra_pnginfo, dict):
+            if metadata_mode in ("all", "workflow") and "workflow" in extra_pnginfo:
+                add_json("workflow", extra_pnginfo["workflow"])
+            if metadata_mode in ("all", "prompt") and "prompt" in extra_pnginfo:
+                add_json("prompt", extra_pnginfo["prompt"])
+        elif prompt and metadata_mode in ("all", "prompt"):
+            add_json("prompt", prompt)
+        return pnginfo
+
+    def generate_data_url_and_trigger_download(
+        self,
+        images,
+        filename_prefix="ComfyUI",
+        include_timestamp=True,
+        metadata_mode="all",
+        output_format="PNG",
+        quality=90,
+        png_compress_level=4,
+        webp_lossless=False,
+        index_suffix=True,
+        start_index=1,
+        zero_padding=4,
+        batch_zip=False,
+        zip_filename="ComfyUI_Images.zip",
+        clipboard=False,
+        open_in_new_tab=False,
+        save_to_folder=False,
+        notify_thumbnails=True,
+        developer_emit=True,
+        prompt=None,
+        extra_pnginfo=None,
+        # Back-compat: ignore old add_metadata if present in older workflows
+        add_metadata=True,
+    ):
         results = []
 
-        for image in images:
+        fmt = (output_format or "PNG").upper()
+        if fmt not in ("PNG", "JPEG", "WEBP"):
+            fmt = "PNG"
+
+        prefix = self._sanitize_filename(str(filename_prefix or "ComfyUI"))
+        ext_map = {"PNG": ".png", "JPEG": ".jpg", "WEBP": ".webp"}
+        mime_map = {"PNG": "image/png", "JPEG": "image/jpeg", "WEBP": "image/webp"}
+
+        # Prepare timestamp once per batch
+        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3] if include_timestamp else None
+
+        counter = int(start_index) if isinstance(start_index, int) else 1
+        pad = max(1, min(int(zero_padding), 8))
+
+        for idx, image in enumerate(images):
             try:
-                img_np = image.cpu().numpy()
-                if img_np.shape[0] == 1:
-                    img_np = np.squeeze(img_np, axis=0)
-                img_pil = Image.fromarray((img_np * 255).astype(np.uint8))
+                img_pil = self._tensor_to_pil(image)
+                # Adjust for format
+                save_kwargs = {}
+                if fmt == "PNG":
+                    save_kwargs["compress_level"] = int(png_compress_level)
+                    pnginfo = self._build_pnginfo(metadata_mode, prompt, extra_pnginfo)
+                else:
+                    pnginfo = None
+
+                if fmt == "JPEG":
+                    if img_pil.mode == "RGBA":
+                        img_pil = img_pil.convert("RGB")
+                    save_kwargs["quality"] = int(max(1, min(quality, 100)))
+                    save_kwargs["optimize"] = True
+                elif fmt == "WEBP":
+                    if img_pil.mode not in ("RGB", "RGBA"):
+                        img_pil = img_pil.convert("RGBA")
+                    if webp_lossless:
+                        save_kwargs["lossless"] = True
+                        # quality ignored when lossless
+                    else:
+                        save_kwargs["quality"] = int(max(1, min(quality, 100)))
 
                 with io.BytesIO() as byte_stream:
-                    pnginfo = None
-                    if add_metadata:
-                        pnginfo = PngImagePlugin.PngInfo()
-                        # Embed extra_pnginfo as JSON under "extra_pnginfo"
-                        if extra_pnginfo and isinstance(extra_pnginfo, dict):
-                            # If workflow is present, embed as JSON string under "workflow"
-                            if "workflow" in extra_pnginfo:
-                                pnginfo.add_text("workflow", json.dumps(extra_pnginfo["workflow"]))
-                            # If prompt is present, embed as JSON string under "prompt"
-                            if "prompt" in extra_pnginfo:
-                                pnginfo.add_text("prompt", json.dumps(extra_pnginfo["prompt"]))
-                            # Optionally, embed all other keys as plain text for reference
-                            for k, v in extra_pnginfo.items():
-                                if k not in ("workflow", "prompt"):
-                                    pnginfo.add_text(str(k), str(v))
-                    img_pil.save(byte_stream, format='PNG', compress_level=4, pnginfo=pnginfo)
-                    png_bytes = byte_stream.getvalue()
+                    if fmt == "PNG":
+                        img_pil.save(byte_stream, format="PNG", pnginfo=pnginfo, **save_kwargs)
+                    else:
+                        img_pil.save(byte_stream, format=fmt, **save_kwargs)
+                    img_bytes = byte_stream.getvalue()
 
-                base64_encoded_data = base64.b64encode(png_bytes).decode('utf-8')
-                data_url = f"data:image/png;base64,{base64_encoded_data}"
+                b64 = base64.b64encode(img_bytes).decode("utf-8")
+                data_url = f"data:{mime_map[fmt]};base64,{b64}"
 
-                # Create filename with optional timestamp
-                if include_timestamp:
-                    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
-                    filename = f"{filename_prefix}_{timestamp}.png"
-                else:
-                    # Simple counter for multiple images when no timestamp
-                    filename = f"{filename_prefix}.png"
+                # Filename construction
+                parts = [prefix]
+                if index_suffix:
+                    parts.append(str(counter).zfill(pad))
+                if ts:
+                    parts.append(ts)
+                filename = "_".join(parts) + ext_map[fmt]
+                filename = self._sanitize_filename(filename)
+                counter += 1
 
                 results.append({
                     "filename": filename,
-                    "data_url": data_url
+                    "mime": mime_map[fmt],
+                    "data_url": data_url,
                 })
             except Exception as e:
-                # Error filename still uses timestamp to avoid conflicts
-                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+                err_ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
                 results.append({
-                    "filename": f"{filename_prefix}_{timestamp}_error.txt",
-                    "data_url": f"data:text/plain;base64,{base64.b64encode(str(e).encode()).decode()}"
+                    "filename": self._sanitize_filename(f"{prefix}_{err_ts}_error.txt"),
+                    "mime": "text/plain",
+                    "data_url": "data:text/plain;base64," + base64.b64encode(str(e).encode()).decode(),
+                    "error": str(e),
                 })
 
-        return {"ui": {"data_urls": results}}
+        # Prepare options for frontend actions
+        options = {
+            "batch_zip": bool(batch_zip),
+            "zip_filename": self._sanitize_filename(zip_filename if zip_filename else f"{prefix}_{ts or ''}.zip"),
+            "clipboard": bool(clipboard),
+            "open_in_new_tab": bool(open_in_new_tab),
+            "save_to_folder": bool(save_to_folder),
+            "notify_thumbnails": bool(notify_thumbnails),
+            "developer_emit": bool(developer_emit),
+        }
+
+        # Back-compat: also provide data_urls for older JS handlers
+        legacy = [{"filename": f["filename"], "data_url": f["data_url"]} for f in results]
+
+        return {
+            "ui": {
+                "files": results,
+                "options": options,
+                "data_urls": legacy,
+            }
+        }
 
 # --- Node Registration ---
 NODE_CLASS_MAPPINGS = {
