@@ -67,36 +67,35 @@ class DownloadImageDataUrl:
         return Image.fromarray(arr_u8, mode=mode)
 
     def _build_pnginfo(self, metadata_mode, prompt, extra_pnginfo):
-        # Ensure metadata is discoverable by tools expecting tEXt and/or iTXt (uncompressed)
+        # Ensure metadata is discoverable by tools expecting tEXt (ASCII) and/or iTXt (UTF-8)
         if metadata_mode == "none":
             return None
         pnginfo = PngImagePlugin.PngInfo()
         added = False
 
-        def ensure_json_str(obj):
-            if isinstance(obj, str):
-                return obj
+        def to_json_ascii(obj):
             try:
-                return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
+                # ASCII-safe JSON so add_text (tEXt) never fails
+                return json.dumps(obj, ensure_ascii=True, separators=(",", ":"))
             except Exception:
                 try:
-                    return str(obj)
+                    return json.dumps(str(obj), ensure_ascii=True)
                 except Exception:
                     return None
 
         def add_both_chunks(key, obj):
             nonlocal added
-            s = ensure_json_str(obj)
-            if not s:
+            s_ascii = to_json_ascii(obj)
+            if not s_ascii:
                 return
             try:
-                # tEXt (latin-1). Pillow will upgrade to iTXt if needed; still add explicit iTXt below.
-                pnginfo.add_text(key, s)
+                # tEXt (ASCII-safe)
+                pnginfo.add_text(key, s_ascii)
             except Exception:
                 pass
             try:
-                # Explicit iTXt (UTF-8, uncompressed) for maximum compatibility
-                pnginfo.add_itxt(key, s, lang="", tkey=key, compressed=False)
+                # iTXt (UTF-8, uncompressed)
+                pnginfo.add_itxt(key, s_ascii, lang="", tkey=key, compressed=False)
             except Exception:
                 pass
             added = True
@@ -136,6 +135,9 @@ class DownloadImageDataUrl:
 
         fmt = (output_format or "PNG").upper()
         if fmt not in ("PNG", "JPEG", "WEBP"):
+            fmt = "PNG"
+        # Ensure workflow/prompt can be embedded and later detected on drop
+        if metadata_mode != "none" and fmt != "PNG":
             fmt = "PNG"
 
         prefix = self._sanitize_filename(str(filename_prefix or "ComfyUI"))
