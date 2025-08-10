@@ -30,9 +30,6 @@ class DownloadImageDataUrl:
                 "index_suffix": ("BOOLEAN", {"default": True}),
                 "start_index": ("INT", {"default": 1, "min": 0, "max": 10_000}),
                 "zero_padding": ("INT", {"default": 4, "min": 1, "max": 8}),
-                # Client-side actions
-                "batch_zip": ("BOOLEAN", {"default": False, "label": "Batch ZIP (one file)"}),
-                "zip_filename": ("STRING", {"default": "ComfyUI_Images.zip"}),
             },
             "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
         }
@@ -124,8 +121,6 @@ class DownloadImageDataUrl:
         index_suffix=True,
         start_index=1,
         zero_padding=4,
-        batch_zip=False,
-        zip_filename="ComfyUI_Images.zip",
         prompt=None,
         extra_pnginfo=None,
         # Back-compat: ignore old add_metadata if present in older workflows
@@ -220,7 +215,6 @@ class DownloadImageDataUrl:
         return {
             "ui": {
                 "files": results,
-                "options": options,
                 "data_urls": legacy,
             }
         }
