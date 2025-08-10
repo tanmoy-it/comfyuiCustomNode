@@ -16,7 +16,6 @@ app.registerExtension({
 				for (let i = 0; i < len; i++) bytes[i] = bin.charCodeAt(i);
 				return new Blob([bytes], { type: mime });
 			};
-
 			// Utility: filename sanitization (mirror server)
 			const sanitizeFilename = (name, maxLen = 128) => {
 				name = (name || "image").replace(/[\\/:*?"<>|]+/g, "_").trim();

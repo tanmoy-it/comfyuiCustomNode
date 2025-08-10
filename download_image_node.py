@@ -66,53 +66,49 @@ class DownloadImageDataUrl:
         mode = "RGBA" if arr_u8.shape[2] == 4 else "RGB"
         return Image.fromarray(arr_u8, mode=mode)
 
-    def _build_pnginfo(self, metadata_mode, prompt, extra_pnginfo, max_bytes=2 * 1024 * 1024):
-        # Write metadata as UTF-8 iTXt (compressed) so large JSON is preserved and readable by tools.
+    def _build_pnginfo(self, metadata_mode, prompt, extra_pnginfo):
+        # Ensure metadata is discoverable by tools expecting tEXt and/or iTXt (uncompressed)
         if metadata_mode == "none":
             return None
         pnginfo = PngImagePlugin.PngInfo()
         added = False
 
-        def to_json_str(obj):
+        def ensure_json_str(obj):
+            if isinstance(obj, str):
+                return obj
             try:
                 return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
             except Exception:
                 try:
-                    # Fallback: stringify if not JSON-serializable
                     return str(obj)
                 except Exception:
                     return None
 
-        def add_itxt_json(key, obj):
+        def add_both_chunks(key, obj):
             nonlocal added
-            if obj is None:
-                return
-            s = to_json_str(obj)
+            s = ensure_json_str(obj)
             if not s:
                 return
-            # Avoid excessive payloads but do not wrap/alter JSON structure; rely on compression.
-            if len(s.encode("utf-8")) > max_bytes:
-                # Hard cap: drop if way too large to avoid UI blow-ups.
-                return
             try:
-                pnginfo.add_itxt(key, s, lang="", tkey=key, compressed=True)
-                added = True
+                # tEXt (latin-1). Pillow will upgrade to iTXt if needed; still add explicit iTXt below.
+                pnginfo.add_text(key, s)
             except Exception:
-                # Fallback to uncompressed iTXt
-                try:
-                    pnginfo.add_itxt(key, s, lang="", tkey=key, compressed=False)
-                    added = True
-                except Exception:
-                    pass
+                pass
+            try:
+                # Explicit iTXt (UTF-8, uncompressed) for maximum compatibility
+                pnginfo.add_itxt(key, s, lang="", tkey=key, compressed=False)
+            except Exception:
+                pass
+            added = True
 
         if isinstance(extra_pnginfo, dict):
             if metadata_mode in ("all", "workflow") and "workflow" in extra_pnginfo:
-                add_itxt_json("workflow", extra_pnginfo.get("workflow"))
+                add_both_chunks("workflow", extra_pnginfo.get("workflow"))
             if metadata_mode in ("all", "prompt") and "prompt" in extra_pnginfo:
-                add_itxt_json("prompt", extra_pnginfo.get("prompt"))
+                add_both_chunks("prompt", extra_pnginfo.get("prompt"))
         else:
             if metadata_mode in ("all", "prompt") and prompt is not None:
-                add_itxt_json("prompt", prompt)
+                add_both_chunks("prompt", prompt)
 
         return pnginfo if added else None
 
