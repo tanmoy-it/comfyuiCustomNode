@@ -18,6 +18,7 @@ class DownloadImageDataUrl:
                 "images": ("IMAGE", ),
                 "filename_prefix": ("STRING", {"default": "ComfyUI"}),
                 "include_timestamp": ("BOOLEAN", {"default": True}),
+                "add_metadata": ("BOOLEAN", {"default": True, "label": "Add Metadata?"}),
             },
             "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
         }
@@ -27,7 +28,7 @@ class DownloadImageDataUrl:
     OUTPUT_NODE = True
     CATEGORY = "image"
 
-    def generate_data_url_and_trigger_download(self, images, filename_prefix="ComfyUI", include_timestamp=True, prompt=None, extra_pnginfo=None):
+    def generate_data_url_and_trigger_download(self, images, filename_prefix="ComfyUI", include_timestamp=True, add_metadata=True, prompt=None, extra_pnginfo=None):
         results = []
 
         for image in images:
@@ -38,21 +39,21 @@ class DownloadImageDataUrl:
                 img_pil = Image.fromarray((img_np * 255).astype(np.uint8))
 
                 with io.BytesIO() as byte_stream:
-                    pnginfo = PngImagePlugin.PngInfo()
-                    # Embed extra_pnginfo as JSON under "extra_pnginfo"
-                    if extra_pnginfo and isinstance(extra_pnginfo, dict):
-                        # Embed the entire extra_pnginfo as JSON
-                        # pnginfo.add_text("extra_pnginfo", json.dumps(extra_pnginfo)) #not needed for workflow embedding
-                        # If workflow is present, embed as JSON string under "workflow"
-                        if "workflow" in extra_pnginfo:
-                            pnginfo.add_text("workflow", json.dumps(extra_pnginfo["workflow"]))
-                        # If prompt is present, embed as JSON string under "prompt"
-                        if "prompt" in extra_pnginfo:
-                            pnginfo.add_text("prompt", json.dumps(extra_pnginfo["prompt"]))
-                        # Optionally, embed all other keys as plain text for reference
-                        for k, v in extra_pnginfo.items():
-                            if k not in ("workflow", "prompt"):
-                                pnginfo.add_text(str(k), str(v))
+                    pnginfo = None
+                    if add_metadata:
+                        pnginfo = PngImagePlugin.PngInfo()
+                        # Embed extra_pnginfo as JSON under "extra_pnginfo"
+                        if extra_pnginfo and isinstance(extra_pnginfo, dict):
+                            # If workflow is present, embed as JSON string under "workflow"
+                            if "workflow" in extra_pnginfo:
+                                pnginfo.add_text("workflow", json.dumps(extra_pnginfo["workflow"]))
+                            # If prompt is present, embed as JSON string under "prompt"
+                            if "prompt" in extra_pnginfo:
+                                pnginfo.add_text("prompt", json.dumps(extra_pnginfo["prompt"]))
+                            # Optionally, embed all other keys as plain text for reference
+                            for k, v in extra_pnginfo.items():
+                                if k not in ("workflow", "prompt"):
+                                    pnginfo.add_text(str(k), str(v))
                     img_pil.save(byte_stream, format='PNG', compress_level=4, pnginfo=pnginfo)
                     png_bytes = byte_stream.getvalue()
 
