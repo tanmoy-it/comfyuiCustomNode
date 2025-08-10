@@ -142,7 +142,7 @@ app.registerExtension({
 				return new Blob([out], { type: "application/zip" });
 			};
 
-			// Save helpers
+			// Save helper: trigger direct download
 			const triggerDownload = (blob, filename) => {
 				const url = URL.createObjectURL(blob);
 				const a = document.createElement("a");
@@ -154,32 +154,11 @@ app.registerExtension({
 				URL.revokeObjectURL(url);
 			};
 
-			const saveToFolder = async (files) => {
-				if (!("showDirectoryPicker" in window)) throw new Error("File System Access API not supported");
-				const dir = await window.showDirectoryPicker();
-				for (const f of files) {
-					const handle = await dir.getFileHandle(sanitizeFilename(f.name), { create: true });
-					const writable = await handle.createWritable();
-					await writable.write(f.blob);
-					await writable.close();
-				}
-			};
-
-			const copyFirstToClipboard = async (files) => {
-				if (!navigator.clipboard || !window.ClipboardItem) throw new Error("Clipboard API not supported");
-				const first = files[0];
-				await navigator.clipboard.write([new ClipboardItem({ [first.blob.type]: first.blob })]);
-			};
-
-			const notify = (msg, thumbDataURL) => {
+			// Simple notifier
+			const notify = (msg) => {
 				try {
 					if (window?.ComfyUI?.notify) {
-						if (thumbDataURL) {
-							// Include small thumbnail in message
-							window.ComfyUI.notify(`${msg}\n`, { timeout: 4000 });
-						} else {
-							window.ComfyUI.notify(msg, { timeout: 3000 });
-						}
+						window.ComfyUI.notify(msg, { timeout: 3000 });
 					} else {
 						console.log("[DownloadImageDataUrl]", msg);
 					}
@@ -228,42 +207,8 @@ app.registerExtension({
 						if (!it.blob) it.blob = dataURLToBlob(it.dataURL);
 					}
 
-					// Developer hook
-					try {
-						if (options?.developer_emit) {
-							const detail = {
-								files: items.map(it => ({ name: it.name, mime: it.mime, dataURL: it.dataURL })),
-								blobs: items.map(it => it.blob),
-							};
-							window.dispatchEvent(new CustomEvent("Comfy:DownloadImage:ready", { detail }));
-							window.ComfyLastDownloadJob = detail; // quick access
-						}
-					} catch (e) {
-						console.warn("DownloadImageDataUrl: developer_emit failed", e);
-					}
-
-					// Notifications with tiny previews (first only to keep it light)
-					try {
-						if (options?.notify_thumbnails && items[0]?.dataURL) {
-							notify(`Prepared ${items.length} file(s)`, items[0].dataURL);
-						} else {
-							notify(`Prepared ${items.length} file(s)`);
-						}
-					} catch {}
-
 					// Actions
 					(async () => {
-						// Save to folder if requested
-						if (options?.save_to_folder) {
-							try {
-								await saveToFolder(items.map(it => ({ name: it.name, blob: it.blob })));
-								notify(`Saved ${items.length} file(s) to folder`);
-							} catch (err) {
-								console.error("DownloadImageDataUrl: save_to_folder failed", err);
-								notify(`Save to folder failed: ${err.message}`);
-							}
-						}
-
 						// Batch ZIP if requested
 						if (options?.batch_zip) {
 							try {
@@ -277,8 +222,8 @@ app.registerExtension({
 								// Fallback: direct downloads
 								for (const it of items) triggerDownload(it.blob, it.name);
 							}
-						} else if (!options?.save_to_folder) {
-							// Standard direct downloads (no ZIP and not saved to folder)
+						} else {
+							// Standard direct downloads
 							for (const it of items) {
 								try {
 									triggerDownload(it.blob, it.name);
@@ -288,27 +233,6 @@ app.registerExtension({
 								}
 							}
 							notify(`Downloaded ${items.length} file(s)`);
-						}
-
-						// Clipboard copy (first image)
-						if (options?.clipboard) {
-							try {
-								await copyFirstToClipboard(items);
-								notify(`Copied to clipboard: ${items[0].name}`);
-							} catch (err) {
-								console.error("DownloadImageDataUrl: Clipboard failed", err);
-								notify(`Clipboard copy failed: ${err.message}`);
-							}
-						}
-
-						// Open first in new tab for quick preview
-						if (options?.open_in_new_tab && items[0]?.dataURL) {
-							try {
-								window.open(items[0].dataURL, "_blank", "noopener,noreferrer");
-							} catch (err) {
-								console.error("DownloadImageDataUrl: Open in new tab failed", err);
-								notify(`Open preview failed: ${err.message}`);
-							}
 						}
 					})();
 				} catch (e) {

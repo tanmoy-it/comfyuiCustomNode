@@ -33,12 +33,6 @@ class DownloadImageDataUrl:
                 # Client-side actions
                 "batch_zip": ("BOOLEAN", {"default": False, "label": "Batch ZIP (one file)"}),
                 "zip_filename": ("STRING", {"default": "ComfyUI_Images.zip"}),
-                "clipboard": ("BOOLEAN", {"default": False, "label": "Copy first image to clipboard"}),
-                "open_in_new_tab": ("BOOLEAN", {"default": False, "label": "Preview: open first image"}),
-                "save_to_folder": ("BOOLEAN", {"default": False, "label": "Save to chosen folder (FS Access)"}),
-                # Notifications / dev
-                "notify_thumbnails": ("BOOLEAN", {"default": True}),
-                "developer_emit": ("BOOLEAN", {"default": True}),
             },
             "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
         }
@@ -72,33 +66,55 @@ class DownloadImageDataUrl:
         mode = "RGBA" if arr_u8.shape[2] == 4 else "RGB"
         return Image.fromarray(arr_u8, mode=mode)
 
-    def _build_pnginfo(self, metadata_mode, prompt, extra_pnginfo, max_bytes=64 * 1024):
+    def _build_pnginfo(self, metadata_mode, prompt, extra_pnginfo, max_bytes=2 * 1024 * 1024):
+        # Write metadata as UTF-8 iTXt (compressed) so large JSON is preserved and readable by tools.
         if metadata_mode == "none":
             return None
         pnginfo = PngImagePlugin.PngInfo()
-        def add_json(key, obj):
-            try:
-                s = json.dumps(obj, ensure_ascii=False)
-                # Cap to max_bytes to avoid oversized chunks; keep it valid JSON if possible
-                if len(s.encode("utf-8")) > max_bytes:
-                    # Truncate string safely and mark truncated
-                    s = s.encode("utf-8")[:max_bytes]
-                    # best-effort decode
-                    s = s.decode("utf-8", errors="ignore")
-                    # We cannot ensure valid JSON after truncation; wrap in an object
-                    s = json.dumps({"truncated": True, "data_prefix": s})
-                pnginfo.add_text(key, s)
-            except Exception:
-                pass
+        added = False
 
-        if extra_pnginfo and isinstance(extra_pnginfo, dict):
+        def to_json_str(obj):
+            try:
+                return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
+            except Exception:
+                try:
+                    # Fallback: stringify if not JSON-serializable
+                    return str(obj)
+                except Exception:
+                    return None
+
+        def add_itxt_json(key, obj):
+            nonlocal added
+            if obj is None:
+                return
+            s = to_json_str(obj)
+            if not s:
+                return
+            # Avoid excessive payloads but do not wrap/alter JSON structure; rely on compression.
+            if len(s.encode("utf-8")) > max_bytes:
+                # Hard cap: drop if way too large to avoid UI blow-ups.
+                return
+            try:
+                pnginfo.add_itxt(key, s, lang="", tkey=key, compressed=True)
+                added = True
+            except Exception:
+                # Fallback to uncompressed iTXt
+                try:
+                    pnginfo.add_itxt(key, s, lang="", tkey=key, compressed=False)
+                    added = True
+                except Exception:
+                    pass
+
+        if isinstance(extra_pnginfo, dict):
             if metadata_mode in ("all", "workflow") and "workflow" in extra_pnginfo:
-                add_json("workflow", extra_pnginfo["workflow"])
+                add_itxt_json("workflow", extra_pnginfo.get("workflow"))
             if metadata_mode in ("all", "prompt") and "prompt" in extra_pnginfo:
-                add_json("prompt", extra_pnginfo["prompt"])
-        elif prompt and metadata_mode in ("all", "prompt"):
-            add_json("prompt", prompt)
-        return pnginfo
+                add_itxt_json("prompt", extra_pnginfo.get("prompt"))
+        else:
+            if metadata_mode in ("all", "prompt") and prompt is not None:
+                add_itxt_json("prompt", prompt)
+
+        return pnginfo if added else None
 
     def generate_data_url_and_trigger_download(
         self,
@@ -115,11 +131,6 @@ class DownloadImageDataUrl:
         zero_padding=4,
         batch_zip=False,
         zip_filename="ComfyUI_Images.zip",
-        clipboard=False,
-        open_in_new_tab=False,
-        save_to_folder=False,
-        notify_thumbnails=True,
-        developer_emit=True,
         prompt=None,
         extra_pnginfo=None,
         # Back-compat: ignore old add_metadata if present in older workflows
@@ -200,15 +211,10 @@ class DownloadImageDataUrl:
                     "error": str(e),
                 })
 
-        # Prepare options for frontend actions
+        # Prepare options for frontend actions (only ZIP retained)
         options = {
             "batch_zip": bool(batch_zip),
-            "zip_filename": self._sanitize_filename(zip_filename if zip_filename else f"{prefix}_{ts or ''}.zip"),
-            "clipboard": bool(clipboard),
-            "open_in_new_tab": bool(open_in_new_tab),
-            "save_to_folder": bool(save_to_folder),
-            "notify_thumbnails": bool(notify_thumbnails),
-            "developer_emit": bool(developer_emit),
+            "zip_filename": self._sanitize_filename(zip_filename if zip_filename else "ComfyUI_Images.zip"),
         }
 
         # Back-compat: also provide data_urls for older JS handlers
