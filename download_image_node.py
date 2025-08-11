@@ -203,12 +203,6 @@ class DownloadImageDataUrl:
                     "error": str(e),
                 })
 
-        # Prepare options for frontend actions (only ZIP retained)
-        options = {
-            "batch_zip": bool(batch_zip),
-            "zip_filename": self._sanitize_filename(zip_filename if zip_filename else "ComfyUI_Images.zip"),
-        }
-
         # Back-compat: also provide data_urls for older JS handlers
         legacy = [{"filename": f["filename"], "data_url": f["data_url"]} for f in results]
 
